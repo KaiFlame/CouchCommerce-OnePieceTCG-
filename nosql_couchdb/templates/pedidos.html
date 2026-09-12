@@ -1,0 +1,1 @@
+{% extends "base.html" %}{% block content %}<h1>Meus pedidos</h1>{% for p in pedidos %}<div class="card"><h3>{{p._id}}</h3><p>Status: {{p.status}} · Total: R$ {{"%.2f"|format(p.total)}}</p><ul>{% for i in p.itens %}<li>{{i.quantidade}} x {{i.nome}} — R$ {{"%.2f"|format(i.preco_unitario)}}</li>{% endfor %}</ul></div>{% else %}<p>Nenhum pedido.</p>{% endfor %}{% endblock %}
