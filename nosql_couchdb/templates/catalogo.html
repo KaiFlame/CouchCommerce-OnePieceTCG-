@@ -1,1 +1,45 @@
-{% extends "base.html" %}{% block content %}<h1>Catálogo</h1><div class="grid">{% for p in produtos %}<div class="card"><h3>{{p.nome}}</h3><p>{{p.categoria}}</p><p class="price">R$ {{"%.2f"|format(p.preco)}}</p><p>Estoque: {{p.estoque}}</p><form method="post" action="{{url_for('adicionar',produto_id=p._id)}}"><button class="btn">Adicionar</button></form></div>{% endfor %}</div>{% endblock %}
+{% extends "base.html" %}
+{% block title %}Explore as cartas{% endblock %}
+{% block head %}<link rel="stylesheet" href="{{url_for('static', filename='catalog.css')}}">{% endblock %}
+{% block content %}
+<section class="voyage">
+  <div class="voyage-copy"><span class="eyebrow">ONE PIECE TRADING CARD GAME</span>
+  <h1>Um oceano de cartas.<br><em>Sua próxima descoberta.</em></h1>
+  <p>Dos primeiros companheiros às lendas dos mares. Explore as artes, encontre seus personagens e complete sua coleção.</p>
+  <a href="#colecao" class="btn gold">Explorar cartas <span aria-hidden="true">↗</span></a>
+  <div class="hero-caption"><strong>{{"{:,}".format(total_catalogo).replace(",", ".")}}</strong> cartas e artes para descobrir <span>•</span> Edição em inglês</div></div>
+  <div class="hero-cards" aria-hidden="true">{% for p in featured %}<img src="{{p.imagem}}" alt="" fetchpriority="high" width="240" height="336">{% endfor %}<span class="orbit-label">THE GRAND LINE COLLECTION</span></div>
+</section>
+<div class="collection-ribbon"><span>COLEÇÕES</span><span>STARTER DECKS · CARTAS AVULSAS</span><span>PROMOCIONAIS</span><span>DON!!</span></div>
+<section id="colecao">
+<div class="catalog-heading"><div><span class="eyebrow">ENCONTRE SUA PRÓXIMA CARTA</span><h2>Explore a coleção</h2></div><span class="catalog-count">{{total}} resultados <span class="muted">/ {{total_catalogo}} cartas</span></span></div>
+<form class="filters card" method="get" action="#colecao">
+  <div class="search-row"><label class="search-box"><span aria-hidden="true">⌕</span><input type="search" name="q" placeholder="Busque Luffy, Zoro, OP01-001…" aria-label="Nome ou código da carta" value="{{request.args.get('q','')}}"></label><button class="btn" type="submit">Buscar cartas</button></div>
+  <div class="filter-row">
+  {% for field,label in [('grupo','Origem'),('colecao','Coleção'),('cor','Cor'),('raridade','Raridade'),('categoria','Tipo')] %}
+    <label>{{label}}<select name="{{field}}"><option value="">Todas</option>{% for value in options[field] %}<option value="{{value}}" {% if request.args.get(field)==value %}selected{% endif %}>{{value}}</option>{% endfor %}</select></label>
+  {% endfor %}
+  <label>Ordenar<select name="ordem"><option value="codigo">Código da carta</option><option value="nome" {% if request.args.get('ordem')=='nome' %}selected{% endif %}>Nome A–Z</option><option value="preco" {% if request.args.get('ordem')=='preco' %}selected{% endif %}>Menor preço</option></select></label>
+  </div>
+  <div class="filter-bottom"><label><input type="checkbox" name="estoque" value="1" {% if request.args.get('estoque')=='1' %}checked{% endif %}> Somente em estoque</label><a href="{{url_for('catalogo')}}#colecao">Limpar filtros ↺</a></div>
+</form>
+<div class="cards-grid">
+{% for p in produtos %}
+<article class="tcg-card">
+  <button class="art-button" type="button" data-card="{{p|tojson|forceescape}}" aria-label="Ver detalhes de {{p.nome}}">
+    <span class="rarity-pill">{{p.raridade or 'TCG'}}</span>
+    {% if p.imagem %}<img src="{{p.imagem}}" alt="{{p.nome}} — {{p.carta_api_id}}" loading="lazy" decoding="async" width="250" height="350">{% endif %}
+    <span class="image-fallback" {% if p.imagem %}hidden{% endif %}>Imagem não fornecida<br>{{p.carta_api_id}}</span><span class="view-art">Ampliar carta ↗</span>
+  </button>
+  <div class="tcg-info"><div class="card-kicker"><span>{{p.carta_api_id}}</span><span>{{p.categoria}}</span></div><h3>{{p.nome}}</h3><p class="set-name">{{p.colecao}}</p>
+  <div class="buy-row"><div>{% if p.preco is not none %}<strong class="card-price">R$ {{"%.2f"|format(p.preco)|replace('.',',')}}</strong>{% else %}<strong class="consult-price">Para sua coleção</strong>{% endif %}<small>{% if p.estoque > 0 and p.preco is not none %}{{p.estoque}} em estoque{% else %}Sem estoque{% endif %}</small></div>
+  <form method="post" action="{{url_for('adicionar',produto_id=p._id)}}"><button class="add-card" {% if p.estoque <= 0 or p.preco is none %}disabled{% endif %} aria-label="Adicionar {{p.nome}} ao carrinho">＋</button></form></div></div>
+</article>
+{% else %}<div class="empty-state"><h3>Nenhuma carta encontrada</h3><p>Tente outro nome ou remova alguns filtros.</p><a class="btn secondary" href="{{url_for('catalogo')}}#colecao">Ver todas as cartas</a></div>{% endfor %}
+</div>
+<nav class="pagination" aria-label="Páginas do catálogo">{% if page>1 %}<a href="{{page_url(page-1)}}">← Anterior</a>{% endif %}<span>Página <strong>{{page}}</strong> de {{pages}}</span>{% if page<pages %}<a href="{{page_url(page+1)}}">Próxima →</a>{% endif %}</nav>
+<p class="source-note">Dados e imagens: <a href="https://optcgapi.com" target="_blank" rel="noopener">OPTCG API</a>. Artes pertencem aos seus respectivos titulares. Cartas sem estoque estão disponíveis para consulta.</p>
+</section>
+<dialog id="cardDialog"><button class="dialog-close" aria-label="Fechar detalhes">×</button><div class="dialog-layout"><img id="detailImage" alt=""><div><span class="eyebrow" id="detailCode"></span><h2 id="detailName"></h2><p id="detailSet" class="muted"></p><div id="detailStats"></div><h3>Efeito da carta</h3><p id="detailEffect"></p></div></div></dialog>
+{% endblock %}
+{% block scripts %}<script src="{{url_for('static',filename='catalog.js')}}" defer></script>{% endblock %}

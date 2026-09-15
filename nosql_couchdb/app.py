@@ -1,15 +1,13 @@
 import os
 import uuid
+import math
+from card_catalog import fetch_cards, merge_card
 from datetime import datetime, timezone
 from functools import wraps
 
 import requests
 from flask import Flask, flash, redirect, render_template, request, session, url_for
 from werkzeug.security import check_password_hash, generate_password_hash
-
-response = requests.get('https://optcgapi.com/api/sets/card/OP01-001/')
-response_text = response.json()
-
 
 # Configuração da aplicação e do CouchDB
 app = Flask(__name__)
@@ -58,14 +56,10 @@ def find(selector, fields=None, limit=100):
 
 
 def preparar_produto_para_exibicao(produto):
-    """Prepara os dados esperados pelas telas sem alterar o documento no CouchDB.
-
-    Na integração com a API externa, esta função será substituída pelo
-    enriquecimento que buscará nome, coleção, raridade e imagem da carta.
-    """
+    """Usa os metadados importados, mantendo compatibilidade com produtos antigos."""
     produto_exibicao = produto.copy()
-    produto_exibicao["nome"] = produto["carta_api_id"]
-    produto_exibicao["categoria"] = "One Piece TCG"
+    produto_exibicao["nome"] = produto.get("nome") or produto["carta_api_id"]
+    produto_exibicao["categoria"] = produto.get("categoria") or "One Piece TCG"
     return produto_exibicao
 
 
@@ -134,20 +128,61 @@ def login_required(fn):
 # Catálogo e carrinho
 @app.route("/")
 def catalogo():
-    produtos_db = find(
-        {"tipo": "produto", "ativo": True},
-        ["_id", "carta_api_id", "preco", "estoque", "ativo"],
-    )
-    produtos = [
-        preparar_produto_para_exibicao(produto) for produto in produtos_db
-    ]
-    produtos.sort(key=lambda produto: produto["carta_api_id"])
-    return render_template("catalogo.html", produtos=produtos)
+    todos = all_products()
+    options = {field: sorted({p.get(field) or "—" for p in todos})
+               for field in ("grupo", "colecao", "cor", "raridade", "categoria")}
+    produtos = todos
+    q = request.args.get("q", "").strip()[:150]
+    if q:
+        produtos = [p for p in produtos if q.casefold() in
+                    (p.get("nome", "") + " " + p["carta_api_id"]).casefold()]
+    for field in options:
+        value = request.args.get(field)
+        if value:
+            produtos = [p for p in produtos if p.get(field) == value]
+    if request.args.get("estoque") == "1":
+        produtos = [p for p in produtos if p.get("estoque", 0) > 0 and p.get("preco") is not None]
+    order = request.args.get("ordem", "codigo")
+    if order == "nome":
+        produtos.sort(key=lambda p: p.get("nome", "").casefold())
+    elif order == "preco":
+        produtos.sort(key=lambda p: (p.get("preco") is None, p.get("preco") or 0))
+    else:
+        produtos.sort(key=lambda p: (p["carta_api_id"], p["_id"]))
+    total = len(produtos)
+    pages = max(1, math.ceil(total / 24))
+    page = max(1, min(request.args.get("pagina", 1, type=int), pages))
+    args = request.args.to_dict()
+    args.pop("pagina", None)
+    page_url = lambda n: url_for("catalogo", **args, pagina=n) + "#colecao"
+    featured = [p for p in todos if p["carta_api_id"] in
+                ("OP01-001", "OP01-003", "OP05-119") and p.get("imagem")][:3]
+    return render_template("catalogo.html", produtos=produtos[(page-1)*24:page*24],
+                           total=total, total_catalogo=len(todos), options=options,
+                           page=page, pages=pages, page_url=page_url, featured=featured)
+
+
+def all_products():
+    docs, bookmark = [], None
+    while True:
+        query = {"selector": {"tipo": "produto", "ativo": True}, "limit": 500}
+        if bookmark:
+            query["bookmark"] = bookmark
+        result = couch("POST", "/_find", json=query)
+        batch = result.get("docs", [])
+        docs.extend(batch)
+        next_bookmark = result.get("bookmark")
+        if not batch or next_bookmark == bookmark:
+            return docs
+        bookmark = next_bookmark
 
 
 @app.post("/carrinho/adicionar/<path:produto_id>")
 def adicionar(produto_id):
     produto = get(produto_id)
+    if not produto.get("ativo") or produto.get("preco") is None:
+        flash("Esta carta está disponível apenas para consulta.")
+        return redirect(url_for("catalogo"))
     carrinho_atual = session.get("carrinho", {})
     quantidade = int(carrinho_atual.get(produto_id, 0)) + 1
 
@@ -158,6 +193,7 @@ def adicionar(produto_id):
     carrinho_atual[produto_id] = quantidade
     session["carrinho"] = carrinho_atual
     session.modified = True
+    flash("Carta adicionada ao carrinho.")
     return redirect(url_for("catalogo"))
 
 
@@ -182,6 +218,11 @@ def carrinho():
 @app.route("/cadastro", methods=["GET", "POST"])
 def cadastro():
     if request.method == "POST":
+        senha = request.form["senha"]
+        confirmacao = request.form.get("confirmacao", "")
+        if senha != confirmacao:
+            flash("As senhas não coincidem.")
+            return render_template("cadastro.html")
         email = request.form["email"].strip().lower()
         cliente_existente = find({"tipo": "cliente", "email": email}, limit=1)
         if cliente_existente:
@@ -193,7 +234,7 @@ def cadastro():
             "tipo": "cliente",
             "nome": request.form["nome"].strip(),
             "email": email,
-            "senha_hash": generate_password_hash(request.form["senha"]),
+            "senha_hash": generate_password_hash(senha),
             "criado_em": datetime.now(timezone.utc).isoformat(),
         }
         save(cliente)
@@ -308,6 +349,29 @@ def pedidos():
 def init_db():
     seed()
     print("Banco CouchDB inicializado.")
+
+
+@app.cli.command("sync-cards")
+def sync_cards():
+    """Atualiza metadados; preserva preço, estoque e estado de cada produto."""
+    import_cards(fetch_cards())
+
+
+def import_cards(cards):
+    ensure_db()
+    ids = list(cards)
+    count = 0
+    for start in range(0, len(ids), 200):
+        keys = ids[start:start+200]
+        rows = couch("POST", "/_all_docs?include_docs=true", json={"keys": keys})["rows"]
+        existing = {r["id"]: r.get("doc") for r in rows if "id" in r}
+        documents = [merge_card(cards[k], existing.get(k)) for k in keys]
+        results = couch("POST", "/_bulk_docs", json={"docs": documents})
+        failures = [r for r in results if r.get("error")]
+        if failures:
+            raise RuntimeError(f"Importação interrompida: {len(failures)} erros no lote.")
+        count += len(results)
+    print(f"{count} cartas sincronizadas; preços e estoques preservados.")
 
 
 if __name__ == "__main__":

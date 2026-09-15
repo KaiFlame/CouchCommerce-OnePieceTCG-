@@ -1,5 +1,28 @@
 # FACAMP NoSQL Shop — Apache CouchDB + Flask
 
+## Catálogo de cartas OPTCG
+
+O catálogo importa apenas cartas avulsas: coleções, cartas de starter decks,
+promocionais e DON!!. Para atualizar os dados, com CouchDB ativo:
+
+```bash
+python3 -m flask --app app sync-cards
+python3 -m flask --app app run --port 5001
+```
+
+A sincronização faz quatro consultas à OPTCG API. As visitas ao catálogo leem
+somente o CouchDB; as imagens são carregadas do provedor sob demanda.
+Preços, estoques e estado ativo existentes são preservados. Novas cartas ficam
+com preço não definido e estoque zero até configuração da loja. Os preços de
+mercado da API não são convertidos nem usados como preços de venda em reais.
+
+Artes diferentes recebem identificadores próprios, mesmo quando compartilham
+o código da carta. Entradas com a mesma imagem são deduplicadas. Algumas cartas
+não têm imagem na fonte; o catálogo sinaliza isso sem substituir sua arte.
+Não há atualização automática: execute sync-cards quando necessário.
+
+Validação: `python3 -m pytest -q`.
+
 Projeto didático completo para comparar modelagem documental com o projeto relacional.
 
 ## Execução
