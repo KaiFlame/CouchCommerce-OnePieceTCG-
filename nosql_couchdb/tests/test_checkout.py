@@ -94,3 +94,41 @@ def test_expired_account_cannot_checkout(checkout_env, monkeypatch):
     monkeypatch.setattr(shop, "find", lambda *a, **kw: [])
     assert client.post("/checkout", data=address(token)).location.endswith("/login")
     assert not writes
+
+
+def test_quantity_can_be_added_and_updated(monkeypatch):
+    shop.app.config.update(TESTING=True, SECRET_KEY="test-only")
+    product = {"_id": "produto:x", "tipo": "produto", "ativo": True,
+               "preco": 10, "estoque": 50, "carta_api_id": "X", "nome": "X"}
+    monkeypatch.setattr(shop, "get", lambda _: deepcopy(product))
+    client = shop.app.test_client()
+    assert client.post("/carrinho/adicionar/produto:x",
+                       data={"quantidade": "4"}).status_code == 302
+    with client.session_transaction() as session:
+        assert session["carrinho"]["produto:x"] == 4
+    assert client.post("/carrinho/atualizar/produto:x",
+                       data={"quantidade": "7"}).status_code == 302
+    with client.session_transaction() as session:
+        assert session["carrinho"]["produto:x"] == 7
+    assert client.post("/carrinho/atualizar/produto:x",
+                       data={"quantidade": "0"}).status_code == 302
+    with client.session_transaction() as session:
+        assert "produto:x" not in session["carrinho"]
+
+
+def test_ajax_add_returns_json_without_redirecting(monkeypatch):
+    shop.app.config.update(TESTING=True, SECRET_KEY="test-only")
+    product = {"_id": "produto:x", "tipo": "produto", "ativo": True,
+               "preco": 10, "estoque": 50, "carta_api_id": "X", "nome": "X"}
+    monkeypatch.setattr(shop, "get", lambda _: deepcopy(product))
+    client = shop.app.test_client()
+    response = client.post(
+        "/carrinho/adicionar/produto:x",
+        data={"quantidade": "3"},
+        headers={"X-Requested-With": "XMLHttpRequest", "Accept": "application/json"},
+    )
+    assert response.status_code == 200
+    assert response.is_json
+    assert response.json["ok"] is True
+    assert response.json["cart_count"] == 3
+    assert response.json["product_quantity"] == 3

@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from functools import wraps
 
 import requests
-from flask import Flask, flash, redirect, render_template, request, session, url_for
+from flask import Flask, flash, jsonify, redirect, render_template, request, session, url_for
 from werkzeug.security import check_password_hash, generate_password_hash
 
 # Configuração da aplicação e do CouchDB
@@ -183,22 +183,79 @@ def all_products():
 
 @app.post("/carrinho/adicionar/<path:produto_id>")
 def adicionar(produto_id):
+    ajax = request.headers.get("X-Requested-With") == "XMLHttpRequest"
     produto = get(produto_id)
     if not produto.get("ativo") or produto.get("preco") is None:
+        if ajax:
+            return jsonify(ok=False, message="Esta carta está disponível apenas para consulta."), 400
         flash("Esta carta está disponível apenas para consulta.")
         return redirect(url_for("catalogo"))
     carrinho_atual = session.get("carrinho", {})
-    quantidade = int(carrinho_atual.get(produto_id, 0)) + 1
+    try:
+        solicitada = int(request.form.get("quantidade", 1))
+    except (TypeError, ValueError):
+        solicitada = 1
+    if solicitada < 1:
+        if ajax:
+            return jsonify(ok=False, message="Escolha pelo menos uma unidade."), 400
+        flash("Escolha pelo menos uma unidade.")
+        return redirect(url_for("catalogo"))
+    quantidade = int(carrinho_atual.get(produto_id, 0)) + solicitada
 
     if quantidade > int(produto.get("estoque", 0)):
+        if ajax:
+            return jsonify(ok=False, message="Estoque insuficiente."), 400
         flash("Estoque insuficiente.")
         return redirect(url_for("catalogo"))
 
     carrinho_atual[produto_id] = quantidade
     session["carrinho"] = carrinho_atual
     session.modified = True
+    if ajax:
+        return jsonify(
+            ok=True,
+            message="Carta adicionada ao carrinho.",
+            cart_count=sum(int(qtd) for qtd in carrinho_atual.values()),
+            product_quantity=quantidade,
+        )
     flash("Carta adicionada ao carrinho.")
     return redirect(url_for("catalogo"))
+
+
+@app.post("/carrinho/atualizar/<path:produto_id>")
+def atualizar_carrinho(produto_id):
+    try:
+        quantidade = int(request.form.get("quantidade", 0))
+    except (TypeError, ValueError):
+        quantidade = 0
+    carrinho_atual = session.get("carrinho", {})
+    if produto_id not in carrinho_atual:
+        flash("Esta carta não está no carrinho.")
+        return redirect(url_for("carrinho"))
+    produto = get(produto_id)
+    if quantidade < 1:
+        carrinho_atual.pop(produto_id, None)
+        flash("Carta removida do carrinho.")
+    elif quantidade > int(produto.get("estoque", 0)):
+        flash("Quantidade maior que o estoque disponível.")
+        return redirect(url_for("carrinho"))
+    else:
+        carrinho_atual[produto_id] = quantidade
+        flash("Quantidade atualizada.")
+    session["carrinho"] = carrinho_atual
+    session.modified = True
+    return redirect(url_for("carrinho"))
+
+
+@app.post("/carrinho/remover/<path:produto_id>")
+def remover_do_carrinho(produto_id):
+    carrinho_atual = session.get("carrinho", {})
+    if produto_id in carrinho_atual:
+        carrinho_atual.pop(produto_id)
+        session["carrinho"] = carrinho_atual
+        session.modified = True
+        flash("Carta removida do carrinho.")
+    return redirect(url_for("carrinho"))
 
 
 @app.route("/carrinho")

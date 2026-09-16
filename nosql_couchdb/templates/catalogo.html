@@ -33,7 +33,7 @@
   </button>
   <div class="tcg-info"><div class="card-kicker"><span>{{p.carta_api_id}}</span><span>{{p.categoria}}</span></div><h3>{{p.nome}}</h3><p class="set-name">{{p.colecao}}</p>
   <div class="buy-row"><div>{% if p.preco is not none %}<strong class="card-price">R$ {{"%.2f"|format(p.preco)|replace('.',',')}}</strong>{% else %}<strong class="consult-price">Para sua coleção</strong>{% endif %}<small>{% if p.estoque > 0 and p.preco is not none %}{{p.estoque}} em estoque{% else %}Sem estoque{% endif %}</small></div>
-  <form method="post" action="{{url_for('adicionar',produto_id=p._id)}}"><button class="add-card" {% if p.estoque <= 0 or p.preco is none %}disabled{% endif %} aria-label="Adicionar {{p.nome}} ao carrinho">＋</button></form></div></div>
+<form method="post" action="{{url_for('adicionar',produto_id=p._id)}}" class="add-form"><label class="quantity-picker"><span>Qtd.</span><input type="number" name="quantidade" value="1" min="1" max="{{p.estoque}}" {% if p.estoque <= 0 or p.preco is none %}disabled{% endif %} aria-label="Quantidade de {{p.nome}}"></label><button class="add-card" {% if p.estoque <= 0 or p.preco is none %}disabled{% endif %} aria-label="Adicionar {{p.nome}} ao carrinho">＋</button></form></div></div>
 </article>
 {% else %}<div class="empty-state"><h3>Nenhuma carta encontrada</h3><p>Tente outro nome ou remova alguns filtros.</p><a class="btn secondary" href="{{url_for('catalogo')}}#colecao">Ver todas as cartas</a></div>{% endfor %}
 </div>
