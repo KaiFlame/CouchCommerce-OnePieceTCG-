@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Entrega e confirmação{% endblock %}
+{% block head %}
+<style>
+.checkout-heading{max-width:680px;margin-bottom:26px}.checkout-heading h1{font-size:38px;margin:12px 0}.checkout-grid{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(270px,1fr);gap:24px}.delivery-form,.checkout-summary{padding:28px}.checkout-summary{align-self:start;position:sticky;top:100px}.delivery-fields{display:grid;grid-template-columns:1fr 1fr;gap:0 18px}.field.wide{grid-column:1/-1}.field select{width:100%;padding:13px;border:1px solid #d9d7d0;border-radius:10px;background:white;font:inherit}.field input[aria-invalid=true],.field select[aria-invalid=true]{border-color:var(--red)}.field-error{display:block;color:#a9162a;font-size:12px;margin-top:5px}.checkout-item{display:flex;justify-content:space-between;gap:16px;font-size:13px;padding:13px 0;border-bottom:1px solid var(--line)}.checkout-item span{min-width:0;overflow-wrap:anywhere}.checkout-item strong{white-space:nowrap}.checkout-total{display:flex;justify-content:space-between;font-size:22px;font-weight:900;margin:22px 0}.checkout-account{font-size:13px;color:var(--muted);padding:12px 0}.error-summary{padding:14px;background:#fff0ef;border-left:4px solid var(--red);margin-bottom:20px}.checkout-back{display:block;margin-top:18px;text-align:center;font-size:13px}.checkout-note{font-size:12px;color:var(--muted)}
+@media(max-width:700px){.checkout-grid{grid-template-columns:1fr}.checkout-summary{position:static}.delivery-fields{grid-template-columns:1fr}.delivery-form,.checkout-summary{padding:20px}.checkout-heading h1{font-size:30px}.header-inner{flex-direction:column;align-items:stretch}.main-nav{overflow:auto}.main-nav a{white-space:nowrap}main{padding:25px 16px}.footer-inner{flex-direction:column}}
+</style>
+{% endblock %}
+{% block content %}
+<div class="checkout-heading"><span class="eyebrow">ÚLTIMA ETAPA</span><h1>Para onde vamos enviar?</h1><p class="muted">Preencha os dados de entrega e confira suas cartas antes de confirmar.</p><p class="checkout-account">Conectado como <strong>{{session.cliente_nome}}</strong> · <a href="{{url_for('logout')}}">Trocar de conta</a></p></div>
+{% if erros %}<div class="error-summary" role="alert">Confira os campos destacados. O pedido ainda não foi criado.</div>{% endif %}
+<form method="post" action="{{url_for('checkout')}}" class="checkout-grid">
+<input type="hidden" name="csrf_token" value="{{csrf_token}}">
+<section class="card delivery-form"><h2 style="font-size:23px">Dados de entrega</h2><p class="checkout-note">Campos obrigatórios, exceto complemento.</p><div class="delivery-fields">
+{% for key,label,autocomplete,wide in [
+('nome','Nome completo do destinatário','shipping name',true),
+('cep','CEP','shipping postal-code',false),
+('logradouro','Rua / avenida','shipping address-line1',true),
+('numero','Número (ou S/N)','off',false),
+('complemento','Complemento (opcional)','shipping address-line2',false),
+('bairro','Bairro','shipping address-level3',false),
+('cidade','Cidade','shipping address-level2',false)] %}
+<div class="field {% if wide %}wide{% endif %}"><label for="{{key}}">{{label}}</label><input id="{{key}}" name="{{key}}" value="{{entrega.get(key,'')}}" autocomplete="{{autocomplete}}" maxlength="150" {% if key!='complemento' %}required{% endif %} {% if key=='cep' %}inputmode="numeric" pattern="[0-9]{5}-?[0-9]{3}" placeholder="00000-000"{% endif %} {% if key in erros %}aria-invalid="true" aria-describedby="erro-{{key}}"{% endif %}>{% if key in erros %}<span id="erro-{{key}}" class="field-error">{{erros[key]}}</span>{% endif %}</div>
+{% endfor %}
+<div class="field"><label for="uf">Estado</label><select id="uf" name="uf" autocomplete="shipping address-level1" required {% if erros.get('uf') %}aria-invalid="true" aria-describedby="erro-uf"{% endif %}><option value="">Selecione</option>{% for uf in estados %}<option value="{{uf}}" {% if entrega.get('uf')==uf %}selected{% endif %}>{{uf}}</option>{% endfor %}</select>{% if erros.get('uf') %}<span id="erro-uf" class="field-error">{{erros.uf}}</span>{% endif %}</div>
+</div></section>
+<aside class="card checkout-summary"><h2 style="font-size:23px">Confira seu pedido</h2>{% for item in itens %}<div class="checkout-item"><span>{{item.quantidade}} × {{item.nome}}</span><strong>R$ {{"%.2f"|format(item.subtotal)|replace('.',',')}}</strong></div>{% endfor %}<div class="checkout-total"><span>Total</span><span>R$ {{"%.2f"|format(total)|replace('.',',')}}</span></div><p class="checkout-note">Confira o endereço antes de confirmar. O estoque será atualizado quando o pedido for criado.</p><button class="btn full gold" type="submit">Confirmar pedido →</button><a class="checkout-back" href="{{url_for('carrinho')}}">← Voltar ao carrinho</a></aside>
+</form>
+{% endblock %}

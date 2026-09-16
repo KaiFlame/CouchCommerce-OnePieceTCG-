@@ -1,6 +1,8 @@
 import os
 import uuid
 import math
+import re
+import secrets
 from card_catalog import fetch_cards, merge_card
 from datetime import datetime, timezone
 from functools import wraps
@@ -11,7 +13,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 
 # Configuração da aplicação e do CouchDB
 app = Flask(__name__)
-app.secret_key = os.getenv("SECRET_KEY", "dev-change-me")
+app.secret_key = os.getenv("SECRET_KEY") or secrets.token_hex(32)
 
 COUCHDB_URL = os.getenv(
     "COUCHDB_URL", "http://admin:admin@127.0.0.1:5984"
@@ -118,6 +120,8 @@ def login_required(fn):
     @wraps(fn)
     def wrap(*args, **kwargs):
         if not session.get("cliente_id"):
+            if request.endpoint == "checkout":
+                session["voltar_checkout"] = True
             flash("Faça login para continuar.")
             return redirect(url_for("login"))
         return fn(*args, **kwargs)
@@ -260,6 +264,8 @@ def login():
         cliente = clientes[0]
         session["cliente_id"] = cliente["_id"]
         session["cliente_nome"] = cliente["nome"]
+        if session.pop("voltar_checkout", False):
+            return redirect(url_for("checkout"))
         return redirect(url_for("catalogo"))
 
     return render_template("login.html")
@@ -272,13 +278,51 @@ def logout():
 
 
 # Checkout e histórico de pedidos
-@app.post("/checkout")
+ESTADOS = "AC AL AP AM BA CE DF ES GO MA MT MS MG PA PB PR PE PI RJ RN RS RO RR SC SP SE TO".split()
+
+
+def validar_entrega(form):
+    labels = {"nome": "Nome do destinatário", "cep": "CEP", "logradouro": "Rua / avenida",
+              "numero": "Número", "bairro": "Bairro", "cidade": "Cidade", "uf": "Estado"}
+    entrega = {key: form.get(key, "").strip() for key in (*labels, "complemento")}
+    erros = {key: f"Preencha {label.lower()}." for key, label in labels.items() if not entrega[key]}
+    for key, value in entrega.items():
+        if len(value) > 150:
+            erros[key] = "Use no máximo 150 caracteres."
+    if entrega["nome"] and len(entrega["nome"].split()) < 2:
+        erros["nome"] = "Informe o nome completo do destinatário."
+    if entrega["cep"] and not re.fullmatch(r"[0-9]{5}-?[0-9]{3}", entrega["cep"]):
+        erros["cep"] = "Informe um CEP com 8 dígitos."
+    if entrega["uf"] and entrega["uf"] not in ESTADOS:
+        erros["uf"] = "Selecione um estado válido."
+    if not erros:
+        entrega["cep"] = entrega["cep"].replace("-", "")
+    return entrega, erros
+
+
+@app.route("/checkout", methods=["GET", "POST"])
 @login_required
 def checkout():
+    clientes = find({"tipo": "cliente", "_id": session["cliente_id"]}, limit=1)
+    if not clientes:
+        session.pop("cliente_id", None)
+        session.pop("cliente_nome", None)
+        session["voltar_checkout"] = True
+        flash("Sua sessão expirou. Entre novamente para finalizar.")
+        return redirect(url_for("login"))
     carrinho_atual = session.get("carrinho", {})
     if not carrinho_atual:
         flash("Carrinho vazio.")
         return redirect(url_for("catalogo"))
+
+    token = session.setdefault("checkout_token", secrets.token_urlsafe(32))
+    entrega = {"nome": clientes[0].get("nome", "")}
+    erros = {}
+    if request.method == "POST":
+        if not secrets.compare_digest(request.form.get("csrf_token", ""), token):
+            flash("O formulário expirou. Revise a entrega e tente novamente.")
+            return redirect(url_for("checkout"))
+        entrega, erros = validar_entrega(request.form)
 
     produtos_atualizados = []
     itens_do_pedido = []
@@ -288,6 +332,9 @@ def checkout():
         produto = get(produto_id)
         produto_exibicao = preparar_produto_para_exibicao(produto)
         quantidade = int(quantidade)
+        if quantidade < 1 or not produto.get("ativo") or produto.get("preco") is None:
+            flash("Uma carta do carrinho não está disponível para compra.")
+            return redirect(url_for("carrinho"))
 
         if produto["estoque"] < quantidade:
             flash(f"Estoque insuficiente para {produto_exibicao['nome']}")
@@ -310,10 +357,16 @@ def checkout():
         produto["estoque"] -= quantidade
         produtos_atualizados.append(produto)
 
+    if request.method == "GET" or erros:
+        return render_template("checkout.html", entrega=entrega, erros=erros,
+                               estados=ESTADOS, itens=itens_do_pedido,
+                               total=round(total, 2), csrf_token=token), (422 if erros else 200)
+
     pedido = {
         "_id": f"pedido:{uuid.uuid4()}",
         "tipo": "pedido",
         "cliente_id": session["cliente_id"],
+        "entrega": entrega,
         "status": "CRIADO",
         "itens": itens_do_pedido,
         "total": round(total, 2),
@@ -329,6 +382,7 @@ def checkout():
         return redirect(url_for("carrinho"))
 
     session["carrinho"] = {}
+    session.pop("checkout_token", None)
     flash("Pedido criado.")
     return redirect(url_for("pedidos"))
 
