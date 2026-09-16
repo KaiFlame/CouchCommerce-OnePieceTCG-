@@ -1,0 +1,104 @@
+{
+  "verificado_em_utc": "2026-09-16T02:36:40.277780+00:00",
+  "couchdb_version": "3.5.2",
+  "saude_couchdb": "ok",
+  "bancos": [
+    "_replicator",
+    "_users",
+    "ecommerce_facamp"
+  ],
+  "acesso_anonimo_bloqueado_http": 401,
+  "indices_json": [
+    "idx_tipo_ativo",
+    "idx_tipo_carta_api_id",
+    "idx_tipo_cliente",
+    "idx_tipo_email"
+  ],
+  "mango": {
+    "ativos": {
+      "indice": "idx_tipo_ativo",
+      "resultados": 3
+    },
+    "carta": {
+      "indice": "idx_tipo_carta_api_id",
+      "resultados": 1
+    },
+    "cliente_email": {
+      "indice": "idx_tipo_email",
+      "resultados": 0
+    },
+    "pedidos_cliente": {
+      "indice": "idx_tipo_cliente",
+      "resultados": 0
+    }
+  },
+  "produtos": [
+    {
+      "_id": "produto:OP01-001",
+      "_rev": "1-4a4a0901cc7170a583c7ec81e73d21e1",
+      "carta_api_id": "OP01-001",
+      "preco": 89.9,
+      "estoque": 5
+    },
+    {
+      "_id": "produto:OP01-002",
+      "_rev": "1-09a1a210a66eee6cf21b07467847d8f3",
+      "carta_api_id": "OP01-002",
+      "preco": 39.9,
+      "estoque": 8
+    },
+    {
+      "_id": "produto:OP01-003",
+      "_rev": "1-23d82784f49fa63f9f7206709a53c784",
+      "carta_api_id": "OP01-003",
+      "preco": 24.9,
+      "estoque": 12
+    }
+  ],
+  "conflito_rev_http": 409,
+  "bulk_nao_atomico": {
+    "produto": "conflict",
+    "pedido": "gravado"
+  },
+  "banco_temporario_removido": true,
+  "rotas_flask": {
+    "/": 200,
+    "/login": 200,
+    "/cadastro": 200,
+    "/carrinho": 200
+  },
+  "docker": {
+    "engine": "29.8.0",
+    "compose": "v5.5.1",
+    "app": "healthy",
+    "couchdb": "healthy",
+    "ports": [
+      "127.0.0.1:5000",
+      "127.0.0.1:5984"
+    ],
+    "volume": "nosql_couchdb_couchdb_data"
+  },
+  "verificacoes_adicionais": {
+    "testes_pytest": 6,
+    "imagem_sem_dotenv": true,
+    "dotenv_ignorado_git": true,
+    "recriacao_preservou_produtos_e_revisoes": true,
+    "segundo_init_db_sem_duplicacao": true,
+    "checkout_nao_testado": true,
+    "replicacao_nao_testada": true,
+    "backup_restore_nao_testado": true
+  },
+  "monitoramento_amostra": {
+    "nota": "Valores pontuais, não um teste de carga nem alertas contínuos.",
+    "couchdb": {
+      "cpu_percent": 1.57,
+      "memoria": "150.2 MiB",
+      "io_bloco": "0 B / 102 kB"
+    },
+    "flask": {
+      "cpu_percent": 0.02,
+      "memoria": "40.79 MiB",
+      "io_bloco": "0 B / 0 B"
+    }
+  }
+}

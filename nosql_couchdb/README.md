@@ -1,13 +1,16 @@
 # FACAMP NoSQL Shop — Apache CouchDB + Flask
 
+Comece pelo [mini relatório-tutorial de Docker e CouchDB](docs/DOCKER_COUCHDB_TUTORIAL.md).
+A [auditoria dos slides](docs/ADERENCIA_PROFESSOR.md) separa o que foi comprovado
+do que ainda falta na aplicação e na entrega.
+
 ## Catálogo de cartas OPTCG
 
 O catálogo importa apenas cartas avulsas: coleções, cartas de starter decks,
 promocionais e DON!!. Para atualizar os dados, com CouchDB ativo:
 
-```bash
-python3 -m flask --app app sync-cards
-python3 -m flask --app app run --port 5001
+```powershell
+docker compose exec app flask --app app sync-cards
 ```
 
 A sincronização faz quatro consultas à OPTCG API. As visitas ao catálogo leem
@@ -21,19 +24,35 @@ o código da carta. Entradas com a mesma imagem são deduplicadas. Algumas carta
 não têm imagem na fonte; o catálogo sinaliza isso sem substituir sua arte.
 Não há atualização automática: execute sync-cards quando necessário.
 
-Validação: `python3 -m pytest -q`.
+Validação: `docker compose exec app python -m pytest -q`.
 
 Projeto didático completo para comparar modelagem documental com o projeto relacional.
 
 ## Execução
-1. `docker compose up -d`
-2. `python -m venv .venv`
-3. Ative a venv e rode `pip install -r requirements.txt`
-4. Configure as variáveis de `.env.example` no terminal
-5. `flask --app app init-db`
-6. `flask --app app run --debug`
-7. Abra `http://127.0.0.1:5000`
-8. Fauxton: `http://127.0.0.1:5984/_utils/`
+Na pasta `nosql_couchdb`, com Docker Desktop aberto:
+
+```powershell
+python scripts/preparar_env.py
+docker compose config --quiet
+docker compose up -d --build --wait couchdb
+docker compose build app
+docker compose run --rm --no-deps app flask --app app init-db
+docker compose --profile web up -d --wait app
+docker compose ps
+```
+
+Site: `http://127.0.0.1:5000`. Fauxton: `http://127.0.0.1:5984/_utils/`.
+O login do Fauxton usa `COUCHDB_USER` e `COUCHDB_PASSWORD` do `.env` local.
+O seed cria somente três cartas ficticiamente precificadas; `sync-cards` é uma etapa separada.
+
+O perfil `web` controla o Flask em Docker. Sem esse perfil, `up` inicia só o banco.
+Para desenvolver Flask na `.venv`, primeiro pare `app` com `docker compose stop app`;
+instale `requirements.txt` e use `python -m flask --app app run --debug`.
+`python-dotenv` faz o CLI Flask ler `.env` automaticamente. Execute pela pasta do projeto.
+`python app.py` não carrega esse arquivo automaticamente: prefira o comando Flask acima.
+
+Dentro do Docker, Flask conecta em `couchdb:5984`; no Windows, em `127.0.0.1:5984`.
+Dados ficam no volume `couchdb_data`. Não use `docker compose down -v` se quiser preservá-los.
 
 ## Conceitos praticados
 - documentos JSON e agregados
