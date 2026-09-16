@@ -68,7 +68,8 @@ def initialize(db, seed=True):
             identifier = "produto:" + code
             if not db.get(identifier):
                 db.save({"_id": identifier, "tipo": "produto", "carta_api_id": code,
-                         "nome": code, "preco": None, "estoque": quantity, "ativo": True,
+                         "variante_api_id": code, "nome": code, "preco": None, "estoque": quantity,
+                         "estoque_inicializado": True, "ativo": True,
                          "schema_version": 2, "criado_em": now(), "atualizado_em": now()})
 
 

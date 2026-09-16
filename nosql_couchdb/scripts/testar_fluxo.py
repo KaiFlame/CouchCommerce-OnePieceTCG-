@@ -25,26 +25,32 @@ def expect(response, status, stage):
 
 def main():
     source = CouchDB()
-    candidates = source.find({"tipo": "produto", "ativo": True, "preco": {"$gt": 0}}, limit=1)
-    if not candidates:
-        raise RuntimeError("Sincronize as cartas e defina ao menos um preço antes do teste.")
+    candidates = source.find_all({"tipo": "produto", "ativo": True})
+    by_card = {}
+    for candidate in candidates:
+        if candidate.get("preco") is not None:
+            by_card.setdefault(candidate["carta_api_id"], []).append(candidate)
+    variants = next((items[:2] for items in by_card.values() if len(items) >= 2), None)
+    if not variants:
+        raise RuntimeError("Sincronize cartas com ao menos duas artes precificadas antes do teste.")
 
     database_name = "ecommerce_e2e_" + uuid.uuid4().hex[:12]
     test_db = CouchDB(name=database_name)
     try:
         initialize(test_db, seed=False)
-        product = deepcopy(candidates[0])
-        product.pop("_rev", None)
-        product.update(estoque=2, ativo=True)
-        test_db.save(product)
+        product, selected_variant = (deepcopy(variants[0]), deepcopy(variants[1]))
+        for item in (product, selected_variant):
+            item.pop("_rev", None)
+            item.update(estoque=2, ativo=True)
+            test_db.save(item)
         shop.db = test_db
         shop.app.config.update(TESTING=True)
         client = shop.app.test_client()
 
         catalog = client.get("/?q=" + product["carta_api_id"])
         expect(catalog, 200, "catalogo")
-        if product["nome"] not in catalog.text:
-            raise RuntimeError("A carta real não apareceu no catálogo.")
+        if product["nome"] not in catalog.text or selected_variant["_id"] not in catalog.text:
+            raise RuntimeError("A carta real ou sua arte alternativa não apareceu no catálogo.")
         with client.session_transaction() as session:
             csrf = session["form_csrf_token"]
 
@@ -65,7 +71,7 @@ def main():
         client.get("/")
         with client.session_transaction() as session:
             csrf = session["form_csrf_token"]
-        added = client.post("/carrinho/adicionar/" + product["_id"],
+        added = client.post("/carrinho/adicionar/" + selected_variant["_id"],
                             data={"csrf_token": csrf})
         expect(added, 302, "carrinho")
         expect(client.get("/carrinho"), 200, "resumo_carrinho")
@@ -81,16 +87,19 @@ def main():
         expect(client.get("/pedidos"), 200, "historico")
 
         orders = test_db.find({"tipo": "pedido"}, limit=10)
-        saved_product = test_db.get(product["_id"])
-        if len(orders) != 1 or orders[0]["status"] != "CONFIRMADO" or saved_product["estoque"] != 1:
+        saved_variant = test_db.get(selected_variant["_id"])
+        if (len(orders) != 1 or orders[0]["status"] != "CONFIRMADO" or
+                saved_variant["estoque"] != 1 or
+                orders[0]["itens"][0].get("variante_api_id") != selected_variant.get("variante_api_id")):
             raise RuntimeError("Pedido ou baixa de estoque divergente.")
         evidence = {
             "ok": True, "database": database_name, "isolated": True,
             "stages": ["carta_real", "catalogo", "cadastro", "login", "carrinho",
                        "checkout", "pedido", "consulta_historico"],
-            "card": product["carta_api_id"], "price_brl": product["preco"],
+            "card": product["carta_api_id"], "selected_variant": selected_variant.get("variante_api_id"),
+            "price_brl": selected_variant["preco"],
             "order_status": orders[0]["status"], "stock_before": 2,
-            "stock_after": saved_product["estoque"], "documents": len(test_db.find_all({})),
+            "stock_after": saved_variant["estoque"], "documents": len(test_db.find_all({})),
         }
         EVIDENCE.parent.mkdir(parents=True, exist_ok=True)
         EVIDENCE.write_text(json.dumps(evidence, indent=2, ensure_ascii=False), encoding="utf-8")

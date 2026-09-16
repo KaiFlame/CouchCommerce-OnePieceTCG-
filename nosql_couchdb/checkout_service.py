@@ -59,6 +59,7 @@ def _items(store, cart):
             raise CheckoutError("Estoque insuficiente para " + (product.get("nome") or product_id))
         price = _money(product.get("preco"))
         items.append({"produto_id": product_id, "carta_api_id": product["carta_api_id"],
+                      "variante_api_id": product.get("variante_api_id", product_id),
                       "nome": product.get("nome") or product["carta_api_id"],
                       "imagem": product.get("imagem", ""), "quantidade": quantity,
                       "preco_unitario": float(price), "subtotal": float(price * quantity)})

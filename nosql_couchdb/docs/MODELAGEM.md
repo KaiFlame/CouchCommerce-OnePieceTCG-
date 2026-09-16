@@ -8,6 +8,7 @@
   "_rev": "2-...",
   "tipo": "produto",
   "carta_api_id": "OP01-001",
+  "variante_api_id": "OP01-001_p1",
   "nome": "Roronoa Zoro",
   "imagem": "https://optcgapi.com/...",
   "colecao": "Romance Dawn",
@@ -26,7 +27,10 @@
 }
 ```
 
-É a projeção comercial local da carta: dados da vitrine, filtros, preço e estoque.
+É a projeção comercial local de uma arte/variante. `carta_api_id` agrupa a carta lógica;
+`variante_api_id` vem da identidade estável da arte na API (desambiguada pela URL somente
+quando a fonte reutiliza o próprio ID). O frontend agrupa as variantes no detalhe, mas o
+estoque, preço, carrinho e pedido sempre usam o `produto_id` da variante escolhida.
 Efeito, poder e custo ficam no cache da integração e não são duplicados no CouchDB.
 
 ## Cliente
@@ -59,6 +63,7 @@ por índice Mango para cadastro e login.
     {
       "produto_id": "produto:OP01-001",
       "carta_api_id": "OP01-001",
+      "variante_api_id": "OP01-001_p1",
       "nome": "Roronoa Zoro",
       "imagem": "https://optcgapi.com/...",
       "quantidade": 1,

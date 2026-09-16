@@ -1,12 +1,13 @@
 {
-  "verificado_em_utc": "2026-09-16T21:00:12.665148+00:00",
+  "verificado_em_utc": "2026-09-16T22:06:41.024401+00:00",
   "couchdb_version": "3.5.2",
   "saude_couchdb": "ok",
   "bancos": [
     "_replicator",
     "_users",
     "ecommerce_facamp",
-    "ecommerce_facamp_restore_20260916_205602_161761"
+    "ecommerce_facamp_restore_20260916_205602_161761",
+    "ecommerce_facamp_restore_20260916_220350_059797"
   ],
   "acesso_anonimo_bloqueado_http": 401,
   "indices_json": [
@@ -24,7 +25,7 @@
     },
     "carta": {
       "indice": "idx_tipo_carta_api_id",
-      "resultados": 3
+      "resultados": 4
     },
     "categoria": {
       "indice": "idx_tipo_categoria",
@@ -46,27 +47,27 @@
   "produtos_amostra": [
     {
       "_id": "produto:EB01-001",
-      "_rev": "2-c0ee9a67c4331ad2704f1622bb2c9bd5",
+      "_rev": "4-c25ef167a4e48abf6efe6c31e93f76ff",
       "carta_api_id": "EB01-001",
       "preco": 1.25,
       "estoque": 0
     },
     {
       "_id": "produto:EB01-001_p1",
-      "_rev": "2-921c44bce0b14679769fa382365cba4b",
+      "_rev": "4-435c9178acddff485313198afb5f9c29",
       "carta_api_id": "EB01-001",
       "preco": 313.55,
       "estoque": 0
     },
     {
       "_id": "produto:EB01-001_p2",
-      "_rev": "2-a12788a4d4bfd5365d6167c19e9e90b7",
+      "_rev": "4-db4e99cda9c0f4d1f7cb6a4ee2b94695",
       "carta_api_id": "EB01-001",
       "preco": 708.8,
       "estoque": 0
     }
   ],
-  "documentos_no_banco": 5556,
+  "documentos_no_banco": 5695,
   "conflito_rev_http": 409,
   "bulk_nao_atomico": {
     "produto": "conflict",
@@ -80,10 +81,10 @@
     "/carrinho": 200
   },
   "health_aplicacao": {
-    "catalog_cache_age_seconds": 310,
+    "catalog_cache_age_seconds": 24,
     "catalog_degraded": false,
     "couchdb": "ok",
-    "database_ms": 1.39,
+    "database_ms": 1.61,
     "status": "ok"
   }
 }

@@ -71,12 +71,12 @@ pedidos por cliente e pedidos por status.
 ## 5. Conferir automaticamente
 
 ```powershell
-docker compose run --rm --no-deps app python -m pytest -q
+docker compose --profile web run --rm --no-deps app python -m pytest -q
 docker compose --profile tools run --rm admin python scripts/verificar_couchdb.py
 docker compose --profile tools run --rm admin python scripts/testar_fluxo.py
 ```
 
-O esperado atualmente é `40 passed`. O teste completo usa um banco temporário e não
+O esperado atualmente é `42 passed`. O teste completo usa um banco temporário e não
 altera clientes, estoque ou pedidos da loja principal.
 
 ## 6. Atualizar cartas
@@ -85,8 +85,10 @@ altera clientes, estoque ou pedidos da loja principal.
 docker compose --profile tools run --rm admin flask --app app sync-cards
 ```
 
-O preço didático é `market_price USD × 5`. A sincronização preserva estoque, estado
-ativo e revisões. Se a API falhar, o site usa o CouchDB e o último cache válido.
+O preço didático é `market_price USD × 5`. Cada documento é uma variante/arte, com
+`carta_api_id` para a carta-base e `variante_api_id` para a arte. A sincronização preserva
+estoque, estado ativo e revisões; a vitrine agrupa artes no detalhe. Se a API falhar, o site
+usa o CouchDB e o último cache válido.
 
 ## 7. Replicação, backup e restauração
 

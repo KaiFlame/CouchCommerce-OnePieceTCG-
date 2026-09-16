@@ -1,18 +1,18 @@
-# Aderência aos slides e evidências
+## Requisitos funcionais
 
-Atualizado em 16/09/2026 após execução real. Referências: HTMLs da disciplina sobre o
-ciclo NoSQL e o projeto prático CouchDB.
+| Requisito | Demonstração |
+|---|---|
+| RF01 — listar produtos | `GET /`, busca/filtros e paginação do catálogo |
+| RF02 — cadastrar cliente | `GET/POST /cadastro`, hash de senha e e-mail único |
+| RF03 — autenticar | `GET/POST /login`, sessão e `POST /logout` com CSRF |
+| RF04 — finalizar pedido | `/carrinho` → `/checkout` → `pedido:...` e baixa de estoque |
+| RF05 — consultar histórico | `GET /pedidos`, consulta Mango por `cliente_id` |
 
-## Modelagem adotada
+## Por que CouchDB/NoSQL
 
-A aplicação mantém o exemplo didático do professor: `produto`, `cliente` e `pedido`.
-`produto` substitui o produto genérico por uma carta identificada por `carta_api_id`.
-O preço é calculado como `market_price USD × 5`; estoque e ativo são regras locais.
-
-O CouchDB guarda nome, imagem, coleção e propriedades usadas na vitrine/filtros para
-reduzir dependência externa. Efeito, poder e custo permanecem no cache da API. O pedido
-referencia cliente/produto e embute o snapshot dos itens. Assim, o histórico não muda
-quando a API ou o produto mudam.
+O catálogo é uma projeção documental de variantes de carta, com campos variáveis vindos
+da API e leitura direta para vitrine/filtros. Pedido é um agregado que embute o snapshot
+imutável dos itens; CouchDB atende esses padrões via JSON/REST, Mango e MVCC por `_rev`.
 
 ## Rastreabilidade
 
@@ -24,9 +24,9 @@ quando a API ou o produto mudam.
 | Mango e índices | Seis índices coerentes com as consultas | `scripts/verificar_couchdb.py` |
 | `_id`, `_rev` e 409 | Reservas otimistas com três tentativas | testes e verificador |
 | `_bulk_docs` não ACID | Falha parcial demonstrada e resultados conferidos | verificador |
-| Consistência do checkout | Idempotência, estoque não negativo e compensação | 40 testes |
+| Consistência do checkout | Idempotência, estoque não negativo, compensação e snapshot da arte | testes + E2E |
 | Senhas e segredos | Hash Werkzeug, `.env`, conta CouchDB restrita e CSRF | código + HTTP 401 anônimo |
-| Testes de integração | Carta real até pedido confirmado em banco isolado | `evidencias/fluxo_completo.json` |
+| Testes de integração | Carta real, escolha de arte, cadastro e pedido confirmado em banco isolado | `evidencias/fluxo_completo.json` |
 | Replicação | Segunda instância, conteúdo comparado por SHA-256 | `evidencias/replicacao.json` |
 | Backup e restore | Backup lógico e restauração em banco novo | `evidencias/backup.json` e `restore.json` |
 | Observabilidade | `/health`, request ID, duração e logs de falha | healthcheck do Compose |

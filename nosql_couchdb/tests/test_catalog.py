@@ -17,6 +17,17 @@ def test_sync_preserves_inventory_and_revision():
     assert merge_card({"nome": "Zoro"})["preco"] is None
 
 
+def test_variant_inventory_is_initialized_once_and_explicit_zero_is_preserved():
+    created = merge_card({"_id": "produto:arte", "nome": "Zoro"})
+    assert created["estoque"] == 5 and created["estoque_inicializado"] is True
+    depleted = merge_card({"_id": "produto:arte", "nome": "Zoro"},
+                           {"_id": "produto:arte", "estoque": 0, "estoque_inicializado": True})
+    assert depleted["estoque"] == 0
+    migrated = merge_card({"_id": "produto:arte", "nome": "Zoro"},
+                           {"_id": "produto:arte", "estoque": 0})
+    assert migrated["estoque"] == 5
+
+
 @pytest.mark.parametrize("usd,expected", [(2.15, 10.75), ("0.333", 1.67), ("0.001", 0.01),
                                          (None, None), (0, None), (-1, None), ("NaN", None),
                                          ("Infinity", None), ("invalid", None), ("0.0001", None)])

@@ -1,9 +1,9 @@
 {
   "source": "ecommerce_facamp",
-  "restored_database": "ecommerce_facamp_restore_20260916_205602_161761",
-  "documents": 5556,
-  "sha256": "0afaf71a256482bcad1213dcb7fb21e045b15e0d254da9e5ec675e838d30c2c9",
-  "seconds": 2.63,
+  "restored_database": "ecommerce_facamp_restore_20260916_220646_643724",
+  "documents": 5695,
+  "sha256": "f8a66cd02f6aa2424dead44a40977fdeb9250b223ecb8e2da4311ba2913e8319",
+  "seconds": 2.712,
   "revisions": "novas; backup lógico não preserva árvore MVCC",
   "ok": true
 }

@@ -117,6 +117,24 @@ def preparar_produto_para_exibicao(produto):
     return produto_exibicao
 
 
+def agrupar_por_carta(produtos):
+    """Conserva cada produto/arte no banco e agrupa somente a vitrine."""
+    grupos = {}
+    for produto in produtos:
+        chave = produto["carta_api_id"]
+        grupo = grupos.setdefault(chave, {"carta_api_id": chave, "variantes": []})
+        grupo["variantes"].append(produto)
+    cartas = []
+    for grupo in grupos.values():
+        variantes = sorted(grupo["variantes"], key=lambda item: item["_id"])
+        # A primeira opção comprável é a arte inicial; as demais continuam acessíveis no modal.
+        selecionada = next((item for item in variantes if item.get("ativo") and
+                            item.get("estoque", 0) > 0 and item.get("preco") is not None), variantes[0])
+        cartas.append({**selecionada, "variantes": variantes,
+                       "total_variantes": len(variantes)})
+    return cartas
+
+
 # Dados mínimos para estudo antes da integração com a API de cartas
 def seed():
     initialize(db)
@@ -141,17 +159,31 @@ def catalogo():
     todos = [enrich(product) for product in all_products()]
     options = {field: sorted({p.get(field) or "—" for p in todos})
                for field in ("grupo", "colecao", "cor", "raridade", "categoria")}
-    produtos = todos
+    produtos = agrupar_por_carta(todos)
     q = request.args.get("q", "").strip()[:150]
-    if q:
-        produtos = [p for p in produtos if q.casefold() in
-                    (p.get("nome", "") + " " + p["carta_api_id"]).casefold()]
-    for field in options:
-        value = request.args.get(field)
-        if value:
-            produtos = [p for p in produtos if p.get(field) == value]
-    if request.args.get("estoque") == "1":
-        produtos = [p for p in produtos if p.get("estoque", 0) > 0 and p.get("preco") is not None]
+    selected_filters = {field: request.args.get(field) for field in options if request.args.get(field)}
+
+    def matching_variants(card):
+        matches = card["variantes"]
+        if q:
+            matches = [item for item in matches if q.casefold() in
+                       (item.get("nome", "") + " " + item["carta_api_id"] + " " +
+                        item.get("variante_api_id", "")).casefold()]
+        for field, value in selected_filters.items():
+            matches = [item for item in matches if item.get(field) == value]
+        if request.args.get("estoque") == "1":
+            matches = [item for item in matches if item.get("estoque", 0) > 0 and item.get("preco") is not None]
+        return matches
+
+    filtrados = []
+    for card in produtos:
+        matches = matching_variants(card)
+        if matches:
+            selected = next((item for item in matches if item.get("ativo") and
+                             item.get("estoque", 0) > 0 and item.get("preco") is not None), matches[0])
+            filtrados.append({**selected, "variantes": card["variantes"],
+                              "total_variantes": card["total_variantes"]})
+    produtos = filtrados
     order = request.args.get("ordem", "codigo")
     if order == "nome":
         produtos.sort(key=lambda p: p.get("nome", "").casefold())
@@ -165,10 +197,11 @@ def catalogo():
     args = request.args.to_dict()
     args.pop("pagina", None)
     page_url = lambda n: url_for("catalogo", **args, pagina=n) + "#colecao"
-    featured = [p for p in todos if p["carta_api_id"] in
+    featured = [p for p in agrupar_por_carta(todos) if p["carta_api_id"] in
                 ("OP01-001", "OP01-003", "OP05-119") and p.get("imagem")][:3]
     return render_template("catalogo.html", produtos=produtos[(page-1)*24:page*24],
-                           total=total, total_catalogo=len(todos), options=options,
+                           total=total, total_catalogo=len(agrupar_por_carta(todos)),
+                           total_variantes=len(todos), options=options,
                            page=page, pages=pages, page_url=page_url, featured=featured)
 
 
@@ -250,15 +283,23 @@ def cadastro():
             flash("E-mail já cadastrado.")
             return render_template("cadastro.html")
 
+        # UUID5 dá ao e-mail normalizado uma identidade determinística: em uma corrida,
+        # CouchDB devolve 409 para a segunda criação em vez de aceitar dois clientes.
         cliente = {
-            "_id": f"cliente:{uuid.uuid4()}",
+            "_id": f"cliente:{uuid.uuid5(uuid.NAMESPACE_URL, 'cliente:' + email)}",
             "tipo": "cliente",
             "nome": nome,
             "email": email,
             "senha_hash": generate_password_hash(senha),
             "criado_em": datetime.now(timezone.utc).isoformat(),
         }
-        save(cliente)
+        try:
+            save(cliente)
+        except DatabaseError as error:
+            if error.status != 409:
+                raise
+            flash("E-mail já cadastrado.")
+            return render_template("cadastro.html")
         flash("Cadastro realizado.")
         return redirect(url_for("login"))
 
@@ -292,8 +333,11 @@ def login():
     return render_template("login.html")
 
 
-@app.get("/logout")
+@app.post("/logout")
 def logout():
+    if not valid_form_csrf():
+        flash("O formulário expirou. Tente novamente.")
+        return redirect(url_for("catalogo"))
     session.clear()
     return redirect(url_for("catalogo"))
 
@@ -369,6 +413,8 @@ def checkout():
             {
                 "produto_id": produto["_id"],
                 "carta_api_id": produto["carta_api_id"],
+                "variante_api_id": produto.get("variante_api_id", produto["_id"]),
+                "imagem": produto_exibicao.get("imagem", ""),
                 "nome": produto_exibicao["nome"],
                 "quantidade": quantidade,
                 "preco_unitario": preco_unitario,
@@ -428,8 +474,7 @@ def sync_cards():
     """Atualiza preço (USD × 5) e cache; preserva estoque e ativo."""
     try:
         cards = fetch_cards()
-        import_cards(cards)
-        save_cache(cards)
+        save_cache(import_cards(cards))
     except (requests.RequestException, ValueError, DatabaseError):
         raise click.ClickException("Sincronização incompleta. Cache anterior preservado; execute novamente. Credenciais omitidas.") from None
 
@@ -443,13 +488,27 @@ def recover_checkouts():
 
 def import_cards(cards):
     # init-db é uma etapa administrativa separada. Sincronizar não cria índices.
-    ids = list(cards)
+    # Migração suave: versões anteriores usavam o ID da imagem no _id. Reutilize-o
+    # quando a mesma URL já existir, preservando estoque, pedidos e carrinhos.
+    existing_products = db.find_all({"tipo": "produto"})
+    existing_by_image = {item.get("imagem"): item for item in existing_products if item.get("imagem")}
+    synchronized = {}
+    for metadata in cards.values():
+        previous = existing_by_image.get(metadata.get("imagem"))
+        if previous:
+            metadata = {**metadata, "_id": previous["_id"]}
+        synchronized[metadata["_id"]] = metadata
+    ids = list(synchronized)
     count = 0
+    changed = 0
     for start in range(0, len(ids), 200):
         keys = ids[start:start+200]
         rows = couch("POST", "/_all_docs?include_docs=true", json={"keys": keys})["rows"]
         existing = {r["id"]: r.get("doc") for r in rows if "id" in r}
-        documents = [merge_card(cards[k], existing.get(k)) for k in keys]
+        documents = [merge_card(synchronized[k], existing.get(k)) for k in keys]
+        documents = [document for document in documents if document is not existing.get(document["_id"])]
+        if not documents:
+            continue
         results = db.bulk(documents)
         for document, result in zip(documents, results):
             if result.get("id") != document["_id"]:
@@ -458,7 +517,7 @@ def import_cards(cards):
                 for attempt in range(3):
                     current = get(document["_id"])
                     try:
-                        save(merge_card(cards[document["_id"]], current))
+                        save(merge_card(synchronized[document["_id"]], current))
                         break
                     except DatabaseError as error:
                         if error.status != 409 or attempt == 2:
@@ -466,8 +525,26 @@ def import_cards(cards):
             elif not result.get("ok"):
                 raise DatabaseError(503, "Falha individual na sincronização")
         count += len(results)
-    app.logger.info("catalog_sync count=%s priced=%s", count, sum(c.get("preco") is not None for c in cards.values()))
-    print(f"{count} cartas sincronizadas; preços USD × 5; estoques preservados.")
+        changed += len(documents)
+    # Uma versão antiga do normalizador criou IDs ``art-...`` quando a API não
+    # trazia URL de imagem. A fonte atual já oferece a variante equivalente. Não
+    # apagamos esses documentos (podem ser úteis em histórico), mas retiramos da
+    # vitrine somente os legados sem estoque e sem identidade de variante.
+    legacy = [item for item in existing_products if item.get("origem") == "optcgapi.com" and
+              not item.get("variante_api_id") and item.get("ativo") and item.get("estoque") == 0]
+    for start in range(0, len(legacy), 200):
+        batch = []
+        for item in legacy[start:start+200]:
+            item.update(ativo=False, substituido_por="sincronizacao_api_atual", atualizado_em=now())
+            batch.append(item)
+        results = db.bulk(batch)
+        if any(not result.get("ok") for result in results):
+            raise DatabaseError(503, "Falha ao arquivar projeção legada")
+    archived = len(legacy)
+    app.logger.info("catalog_sync products=%s changed=%s priced=%s", len(synchronized), changed,
+                    sum(c.get("preco") is not None for c in synchronized.values()))
+    print(f"{len(synchronized)} variantes verificadas; {changed} atualizadas; {archived} legadas arquivadas.")
+    return synchronized
 
 
 if __name__ == "__main__":

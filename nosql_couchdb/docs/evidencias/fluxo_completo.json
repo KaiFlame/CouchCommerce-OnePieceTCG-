@@ -1,6 +1,6 @@
 {
   "ok": true,
-  "database": "ecommerce_e2e_889bcf479573",
+  "database": "ecommerce_e2e_2eba2220986b",
   "isolated": true,
   "stages": [
     "carta_real",
@@ -13,9 +13,10 @@
     "consulta_historico"
   ],
   "card": "EB01-001",
-  "price_brl": 1.25,
+  "selected_variant": "EB01-001_p1",
+  "price_brl": 313.55,
   "order_status": "CONFIRMADO",
   "stock_before": 2,
   "stock_after": 1,
-  "documents": 3
+  "documents": 4
 }
