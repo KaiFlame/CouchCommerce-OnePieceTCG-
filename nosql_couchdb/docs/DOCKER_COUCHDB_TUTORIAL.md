@@ -1,12 +1,12 @@
 # Docker + CouchDB: mini relatório-tutorial
 
-Verificado em 15/09/2026, horário de Brasília. Ambiente local do CouchCommerce One Piece TCG.
+Atualizado em 16/09/2026. Ambiente local do CouchCommerce One Piece TCG.
 
 ## 1. O que ficou pronto
 
 Docker Engine 29.8.0 e Compose v5.5.1 estão funcionando. CouchDB 3.5.2 e Flask/Gunicorn
-estão em contêineres separados, ambos `healthy`. O banco `ecommerce_facamp` contém os
-três produtos do seed e quatro índices Mango. Não foi feita a importação externa de cartas.
+estão em contêineres separados e `healthy`. O banco contém 5.549 cartas reais importadas,
+seis índices Mango e regras de validação documental.
 
 O navegador acessa Flask na porta 5000. Flask acessa CouchDB pela rede do Compose,
 usando `couchdb:5984`. Fauxton é a interface administrativa do CouchDB, na porta 5984.
@@ -34,14 +34,17 @@ Neste computador, essa preparação já foi feita. Não envie `.env` ao GitHub.
 
 ```powershell
 docker compose up -d --build --wait couchdb
-docker compose build app
-docker compose run --rm --no-deps app flask --app app init-db
+docker compose --profile tools build admin
+docker compose --profile tools run --rm admin flask --app app init-db
+docker compose --profile tools run --rm admin flask --app app setup-user
+docker compose --profile tools run --rm admin flask --app app sync-cards
 ```
 
 - `up`: cria/inicia o banco; `-d`: libera o terminal; `--wait`: aguarda saúde.
-- `build app`: prepara a imagem Python do projeto.
-- `run --rm`: usa essa imagem para executar `init-db` e remove somente esse contêiner temporário.
-- `init-db`: cria `ecommerce_facamp`, três produtos e índices. Não apaga produtos já existentes.
+- `build admin`: prepara a mesma aplicação com credenciais administrativas apenas para tarefas.
+- `run --rm`: remove somente o contêiner temporário, nunca o volume do banco.
+- `init-db`: cria o banco, índices e validação; `setup-user` cria a conta restrita do site.
+- `sync-cards`: importa/atualiza cartas e preços, preservando estoque e `_rev`.
 
 A configuração `single_node=true` cria os bancos internos `_users` e `_replicator`.
 Eles são infraestrutura do CouchDB, não novos tipos de documento da loja.
@@ -68,28 +71,29 @@ e seu `_rev`. Em **Mango Query**, execute:
 }
 ```
 
-Resultado esperado: três produtos. O seed tem códigos, preços de estudo e estoques;
-nomes, imagens e filtros completos dependem da futura sincronização com a API.
+Resultado esperado: cartas sincronizadas. O preço é o `market_price` da API multiplicado
+por 5; cartas sem preço continuam disponíveis para consulta.
 
 ## 5. Repetir as verificações
 
 ```powershell
-docker compose exec app python -m pytest -q
-docker compose exec app python scripts/verificar_couchdb.py
+docker compose run --rm --no-deps app python -m pytest -q
+docker compose --profile tools run --rm admin python scripts/verificar_couchdb.py
+docker compose --profile tools run --rm admin python scripts/testar_fluxo.py
 docker compose logs --tail 30 couchdb app
 docker stats --no-stream
 ```
 
-Comprovamos: seis testes aprovados; consultas Mango usando os quatro índices;
-acesso anônimo ao banco recusado com 401; revisão antiga recusada com 409;
-falha parcial em `_bulk_docs`; quatro páginas Flask retornando 200.
+Comprovamos: 40 testes aprovados; consultas Mango usando seis índices;
+acesso anônimo recusado com 401; revisão antiga recusada com 409; falha parcial em
+`_bulk_docs`; health check e fluxo completo autenticado retornando resultados reais.
 O script cria e remove somente um banco temporário próprio para os testes de escrita.
 Ele não realiza compras em `ecommerce_facamp`.
 
 Recriamos o contêiner do banco mantendo seu volume e repetimos `init-db`:
 os produtos mantiveram IDs, revisões, preços e estoques.
-Isso comprova persistência e repetição segura do seed neste cenário, não backup nem
-idempotência de checkout. Os resultados estão em [evidencias_docker.json](evidencias_docker.json).
+Replicação, backup e restauração foram comprovados por checksum. Os resultados ficam
+em `docs/evidencias`, e o backup completo privado em `.local/operations`.
 
 ## 6. Uso diário
 
@@ -111,20 +115,23 @@ O CLI Flask lê `.env` via `python-dotenv`. A URL local usa `127.0.0.1`, enquant
 o Compose substitui essa URL por `couchdb` dentro da aplicação em Docker.
 Não rode os dois Flask na porta 5000 simultaneamente. Não use `down -v`: isso remove o volume.
 
-## 7. Ajustes e próximos passos
+## 7. Operações e entrega
 
-Corrigimos variáveis ausentes no exemplo, proteção do `.env` no Git/build, configuração
-single-node e permissões do arquivo INI. Fixamos as imagens-base por digest, separamos
-Flask no perfil `web`, adicionamos verificações de saúde e logs HTTP do Gunicorn.
-As regras de negócio de `app.py` e a integração em `card_catalog.py` foram preservadas.
+```powershell
+docker compose --profile ops up -d --wait couchdb-replica
+docker compose --profile tools --profile ops run --rm admin python scripts/operacoes.py demo
+```
+
+O comando demonstra replicação para uma segunda instância, backup lógico com checksum e
+restauração em banco novo. Ele não sobrescreve `ecommerce_facamp`.
 
 O reparo anterior do Windows concluiu WSL/virtualização. Pastas de sockets do Docker
 foram movidas para backups locais recuperáveis; não eram dados do CouchDB.
 Nesta etapa não foi necessário login externo, alteração na BIOS nem nova reinicialização.
 
-Próximo passo didático: inspecionar esses três documentos e a consulta acima no Fauxton.
-Depois, seguir a [auditoria de aderência](ADERENCIA_PROFESSOR.md), que registra as pendências
-antes da entrega. O ambiente está pronto; o projeto completo ainda não está finalizado.
+Para a apresentação, inspecione um `produto`, `cliente` e `pedido` no Fauxton e mostre
+os JSONs de `docs/evidencias`. Deploy em nuvem não foi criado porque o material o trata
+como opcional e não havia infraestrutura de deploy no repositório.
 
 Referências técnicas: [CouchDB single-node](https://docs.couchdb.org/en/stable/setup/single-node.html),
 [CouchDB em Docker](https://docs.couchdb.org/en/stable/install/docker.html),

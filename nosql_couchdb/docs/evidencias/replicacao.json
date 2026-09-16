@@ -1,0 +1,11 @@
+{
+  "source": "ecommerce_facamp",
+  "target": "ecommerce_facamp_replica",
+  "instances": 2,
+  "documents": 5556,
+  "content_sha256": "0afaf71a256482bcad1213dcb7fb21e045b15e0d254da9e5ec675e838d30c2c9",
+  "seconds": 4.428,
+  "verified_at": "20260916_205601_746622",
+  "mode": "one-shot",
+  "ok": true
+}

@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}Serviço indisponível{% endblock %}
+{% block content %}
+<section class="card empty-state">
+  <h1>Não foi possível carregar agora</h1>
+  <p>{{ mensagem }}</p>
+  <a class="btn" href="{{ url_for('catalogo') }}">Tentar novamente</a>
+</section>
+{% endblock %}

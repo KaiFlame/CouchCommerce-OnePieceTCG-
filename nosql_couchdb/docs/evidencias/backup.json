@@ -1,0 +1,10 @@
+{
+  "database": "ecommerce_facamp",
+  "created_at": "20260916_205602_026141",
+  "sha256": "0afaf71a256482bcad1213dcb7fb21e045b15e0d254da9e5ec675e838d30c2c9",
+  "update_seq": "11113-g1AAAACReJzLYWBgYMpgTmHgzcvPy09JdcjLz8gvLskBCeexAEmGBiD1HwiyMpiTGBhEq3OBYuympikpyRaW6NpwGJTIkFSPMOEd2ARzsxRjcxMME7IA7fYr_Q",
+  "documents": 5556,
+  "file": ".local/operations/ecommerce_facamp_20260916_205602_026141.json",
+  "type": "logical-json",
+  "ok": true
+}

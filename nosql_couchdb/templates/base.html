@@ -14,5 +14,5 @@
   <div class="flash-stack">{% for m in get_flashed_messages() %}<div class="flash">{{m}}</div>{% endfor %}</div>
   <main>{% block content %}{% endblock %}</main>
   <footer class="site-footer"><div class="footer-inner"><span><strong>Grand Line Cards</strong> · uma experiência de coleção feita por fãs.</span><span>Flask · CouchDB · REST/JSON</span></div></footer>
-</div><script>window.setTimeout(()=>document.querySelectorAll('.flash').forEach(el=>{el.style.opacity='0';el.style.transform='translateY(-6px)';setTimeout(()=>el.remove(),300)}),4200);</script>{% block scripts %}{% endblock %}
+</div><script>window.setTimeout(()=>document.querySelectorAll('.flash').forEach(el=>{el.style.opacity='0';el.style.transform='translateY(-6px)';setTimeout(()=>el.remove(),300)}),4200);document.querySelectorAll('form').forEach(form=>form.addEventListener('submit',()=>{form.setAttribute('aria-busy','true');const button=form.querySelector('button[type=submit]');if(button)button.disabled=true;}));</script>{% block scripts %}{% endblock %}
 </body></html>

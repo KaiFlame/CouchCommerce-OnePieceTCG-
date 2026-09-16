@@ -1,11 +1,34 @@
-"""Importação explícita e repetível; nunca consulta a API durante uma visita."""
+"""API externa -> cache de características + produto comercial mínimo."""
 import hashlib
-from pathlib import PurePosixPath
+import json
+import os
+from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from pathlib import Path, PurePosixPath
 from urllib.parse import urlparse
 import requests
 
 SOURCES = {"allSetCards": "Coleções", "allSTCards": "Starter decks",
            "allPromos": "Promocionais", "allDonCards": "DON!!"}
+CACHE_FILE = Path(os.getenv("CATALOG_CACHE", ".local/catalog/cards.json"))
+RATE = Decimal("5")
+_cache = (None, {})
+
+
+def now():
+    return datetime.now(timezone.utc).isoformat()
+
+
+def price_brl(value):
+    """Preço comercial didático: market_price USD × 5, centavos HALF_UP."""
+    try:
+        dollars = Decimal(str(value))
+        if not dollars.is_finite() or dollars <= 0 or dollars > 1_000_000:
+            return None
+        result = (dollars * RATE).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        return float(result) if result > 0 else None
+    except (InvalidOperation, ValueError):
+        return None
 
 
 def normalize(card, group):
@@ -24,7 +47,10 @@ def normalize(card, group):
             "cor": card.get("card_color") or "Sem cor",
             "categoria": card.get("card_type") or "DON!!",
             "poder": card.get("card_power"), "custo": card.get("card_cost"),
-            "efeito": card.get("card_text") or "", "origem": "optcgapi.com"}
+            "efeito": card.get("card_text") or "", "origem": "optcgapi.com",
+            "preco_usd": float(card["market_price"]) if price_brl(card.get("market_price")) is not None else None,
+            "preco": price_brl(card.get("market_price")),
+            "preco_data_api": card.get("date_scraped")}
 
 
 def collect(payloads):
@@ -53,6 +79,42 @@ def fetch_cards():
 
 
 def merge_card(metadata, existing=None):
-    if existing:
-        return {**existing, **metadata}
-    return {**metadata, "preco": None, "estoque": 0, "ativo": True}
+    """Atualiza preço/cache; preserva estoque e ativo da loja."""
+    existing = existing or {}
+    # Somente os campos usados pela vitrine/filtros são repetidos no banco.
+    # Texto, poder e custo continuam apenas no cache da API.
+    fields = ("_id", "tipo", "carta_api_id", "nome", "imagem", "colecao", "grupo",
+              "cor", "raridade", "categoria",
+              "preco", "preco_usd", "preco_data_api")
+    doc = {key: metadata.get(key) for key in fields}
+    doc.update(estoque=existing.get("estoque", 0), ativo=existing.get("ativo", True),
+               schema_version=2,
+               criado_em=existing.get("criado_em", now()), atualizado_em=now(),
+               cambio=5, origem="optcgapi.com")
+    if existing.get("_rev"):
+        doc["_rev"] = existing["_rev"]
+    return doc
+
+
+def save_cache(cards):
+    CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    temporary = CACHE_FILE.with_suffix(".tmp")
+    temporary.write_text(json.dumps({"atualizado_em": now(), "cards": cards}, ensure_ascii=False), encoding="utf-8")
+    temporary.replace(CACHE_FILE)
+
+
+def cached_cards():
+    global _cache
+    try:
+        stamp = CACHE_FILE.stat().st_mtime_ns
+        if stamp != _cache[0]:
+            _cache = (stamp, json.loads(CACHE_FILE.read_text(encoding="utf-8"))["cards"])
+        return _cache[1]
+    except (OSError, ValueError, KeyError):
+        return {}
+
+
+def enrich(product):
+    # O preço/estoque do banco sempre prevalece sobre a API/cache.
+    return {**cached_cards().get(product["_id"], {}), **product,
+            "nome": product.get("nome") or product["carta_api_id"]}

@@ -3,63 +3,115 @@ import uuid
 import math
 import re
 import secrets
-from card_catalog import fetch_cards, merge_card
+import logging
+import time
+from card_catalog import fetch_cards, merge_card, enrich, save_cache, now, CACHE_FILE
+from checkout_service import CheckoutError, place_order, recover_pending
+from database import CouchDB, DatabaseError
+from setup_db import initialize, application_user
 from datetime import datetime, timezone
 from functools import wraps
 
 import requests
-from flask import Flask, flash, redirect, render_template, request, session, url_for
+import click
+from dotenv import load_dotenv
+from flask import Flask, flash, redirect, render_template, request, session, url_for, g, jsonify
 from werkzeug.security import check_password_hash, generate_password_hash
 
 # Configuração da aplicação e do CouchDB
 app = Flask(__name__)
-app.secret_key = os.getenv("SECRET_KEY") or secrets.token_hex(32)
+load_dotenv()
+app.secret_key = os.environ["SECRET_KEY"]
+if len(app.secret_key) < 32:
+    raise RuntimeError("Defina SECRET_KEY com pelo menos 32 caracteres aleatórios.")
+app.config.update(MAX_CONTENT_LENGTH=16 * 1024, SESSION_COOKIE_HTTPONLY=True,
+                  SESSION_COOKIE_SAMESITE="Lax", SESSION_COOKIE_SECURE=os.getenv("COOKIE_SECURE") == "1")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+db = CouchDB()
+app.jinja_env.filters["brl"] = lambda value: f"{float(value):.2f}".replace(".", ",")
 
-COUCHDB_URL = os.getenv(
-    "COUCHDB_URL", "http://admin:admin@127.0.0.1:5984"
-).rstrip("/")
-DB_NAME = os.getenv("COUCHDB_DATABASE", "ecommerce_facamp")
-DB_URL = f"{COUCHDB_URL}/{DB_NAME}"
+
+def form_csrf_token():
+    """Token simples para os formulários que alteram a sessão ou o banco."""
+    return session.setdefault("form_csrf_token", secrets.token_urlsafe(32))
+
+
+def valid_form_csrf():
+    expected = session.get("form_csrf_token", "")
+    received = request.form.get("csrf_token", "")
+    return bool(expected and received and secrets.compare_digest(expected, received))
+
+
+app.jinja_env.globals["form_csrf_token"] = form_csrf_token
+
+
+@app.before_request
+def start_request():
+    g.started = time.monotonic()
+    g.request_id = uuid.uuid4().hex[:12]
+
+
+@app.after_request
+def observe_request(response):
+    elapsed = round((time.monotonic() - g.started) * 1000, 2)
+    app.logger.info("http request_id=%s route=%s method=%s status=%s duration_ms=%s",
+                    g.request_id, request.endpoint, request.method, response.status_code, elapsed)
+    response.headers.update({"X-Request-ID": g.request_id, "X-Content-Type-Options": "nosniff",
+                             "X-Frame-Options": "DENY", "Referrer-Policy": "strict-origin-when-cross-origin",
+                             "Content-Security-Policy": "default-src 'self'; img-src 'self' https://optcgapi.com; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"})
+    if app.config["SESSION_COOKIE_SECURE"]:
+        response.headers["Strict-Transport-Security"] = "max-age=31536000"
+    if request.endpoint != "static":
+        response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@app.errorhandler(DatabaseError)
+def database_unavailable(error):
+    return render_template("erro.html", mensagem="Banco temporariamente indisponível. Tente novamente em instantes."), 503
+
+
+@app.get("/health")
+def health():
+    started = time.monotonic()
+    try:
+        db.couch("GET")
+        status, code = "ok", 200
+    except DatabaseError:
+        status, code = "unavailable", 503
+    age = round(time.time() - CACHE_FILE.stat().st_mtime) if CACHE_FILE.exists() else None
+    return jsonify(status=status, couchdb=status, database_ms=round((time.monotonic()-started)*1000, 2),
+                   catalog_cache_age_seconds=age, catalog_degraded=age is None or age > 86400), code
 
 
 # Funções de acesso ao CouchDB
 def raw(method, url, **kwargs):
-    resposta = requests.request(method, url, timeout=10, **kwargs)
-    if resposta.status_code >= 400:
-        raise RuntimeError(f"CouchDB {resposta.status_code}: {resposta.text}")
-    return resposta.json() if resposta.text else {}
+    return db.request(method, url, **kwargs)
 
 
 def couch(method, path="", **kwargs):
-    return raw(method, f"{DB_URL}{path}", **kwargs)
+    return db.couch(method, path, **kwargs)
 
 
 def ensure_db():
-    resposta = requests.put(DB_URL, timeout=10)
-    if resposta.status_code not in (201, 202, 412):
-        raise RuntimeError(resposta.text)
+    initialize(db, seed=False)
 
 
 def save(doc):
-    if "_id" in doc:
-        return couch("PUT", f"/{doc['_id']}", json=doc)
-    return couch("POST", "", json=doc)
+    return db.save(doc)
 
 
 def get(doc_id):
-    return couch("GET", f"/{doc_id}")
+    return db.get(doc_id)
 
 
 def find(selector, fields=None, limit=100):
-    consulta = {"selector": selector, "limit": limit}
-    if fields:
-        consulta["fields"] = fields
-    return couch("POST", "/_find", json=consulta).get("docs", [])
+    return db.find(selector, fields, limit)
 
 
 def preparar_produto_para_exibicao(produto):
     """Usa os metadados importados, mantendo compatibilidade com produtos antigos."""
-    produto_exibicao = produto.copy()
+    produto_exibicao = enrich(produto)
     produto_exibicao["nome"] = produto.get("nome") or produto["carta_api_id"]
     produto_exibicao["categoria"] = produto.get("categoria") or "One Piece TCG"
     return produto_exibicao
@@ -67,53 +119,7 @@ def preparar_produto_para_exibicao(produto):
 
 # Dados mínimos para estudo antes da integração com a API de cartas
 def seed():
-    ensure_db()
-    produtos = [
-        {
-            "_id": "produto:OP01-001",
-            "tipo": "produto",
-            "carta_api_id": "OP01-001",
-            "preco": 89.90,
-            "estoque": 5,
-            "ativo": True,
-        },
-        {
-            "_id": "produto:OP01-002",
-            "tipo": "produto",
-            "carta_api_id": "OP01-002",
-            "preco": 39.90,
-            "estoque": 8,
-            "ativo": True,
-        },
-        {
-            "_id": "produto:OP01-003",
-            "tipo": "produto",
-            "carta_api_id": "OP01-003",
-            "preco": 24.90,
-            "estoque": 12,
-            "ativo": True,
-        },
-    ]
-
-    for produto in produtos:
-        resposta = requests.put(
-            f"{DB_URL}/{produto['_id']}", json=produto, timeout=10
-        )
-        if resposta.status_code not in (201, 202, 409):
-            raise RuntimeError(resposta.text)
-
-    indices = [
-        (["tipo", "ativo"], "idx_tipo_ativo"),
-        (["tipo", "carta_api_id"], "idx_tipo_carta_api_id"),
-        (["tipo", "email"], "idx_tipo_email"),
-        (["tipo", "cliente_id"], "idx_tipo_cliente"),
-    ]
-    for campos, nome in indices:
-        couch(
-            "POST",
-            "/_index",
-            json={"index": {"fields": campos}, "name": nome, "type": "json"},
-        )
+    initialize(db)
 
 
 def login_required(fn):
@@ -132,7 +138,7 @@ def login_required(fn):
 # Catálogo e carrinho
 @app.route("/")
 def catalogo():
-    todos = all_products()
+    todos = [enrich(product) for product in all_products()]
     options = {field: sorted({p.get(field) or "—" for p in todos})
                for field in ("grupo", "colecao", "cor", "raridade", "categoria")}
     produtos = todos
@@ -167,24 +173,19 @@ def catalogo():
 
 
 def all_products():
-    docs, bookmark = [], None
-    while True:
-        query = {"selector": {"tipo": "produto", "ativo": True}, "limit": 500}
-        if bookmark:
-            query["bookmark"] = bookmark
-        result = couch("POST", "/_find", json=query)
-        batch = result.get("docs", [])
-        docs.extend(batch)
-        next_bookmark = result.get("bookmark")
-        if not batch or next_bookmark == bookmark:
-            return docs
-        bookmark = next_bookmark
+    return db.find_all({"tipo": "produto", "ativo": True})
 
 
 @app.post("/carrinho/adicionar/<path:produto_id>")
 def adicionar(produto_id):
+    if not valid_form_csrf():
+        flash("O formulário expirou. Tente novamente.")
+        return redirect(url_for("catalogo"))
+    if not re.fullmatch(r"produto:[A-Za-z0-9._:-]{1,160}", produto_id):
+        flash("Carta inválida.")
+        return redirect(url_for("catalogo"))
     produto = get(produto_id)
-    if not produto.get("ativo") or produto.get("preco") is None:
+    if not produto or not produto.get("ativo") or produto.get("preco") is None:
         flash("Esta carta está disponível apenas para consulta.")
         return redirect(url_for("catalogo"))
     carrinho_atual = session.get("carrinho", {})
@@ -207,7 +208,10 @@ def carrinho():
     total = 0.0
 
     for produto_id, quantidade in session.get("carrinho", {}).items():
-        produto = preparar_produto_para_exibicao(get(produto_id))
+        produto_salvo = get(produto_id)
+        if not produto_salvo:
+            continue
+        produto = preparar_produto_para_exibicao(produto_salvo)
         quantidade = int(quantidade)
         subtotal = float(produto["preco"]) * quantidade
         total += subtotal
@@ -222,12 +226,25 @@ def carrinho():
 @app.route("/cadastro", methods=["GET", "POST"])
 def cadastro():
     if request.method == "POST":
-        senha = request.form["senha"]
+        if not valid_form_csrf():
+            flash("O formulário expirou. Tente novamente.")
+            return redirect(url_for("cadastro"))
+        senha = request.form.get("senha", "")
         confirmacao = request.form.get("confirmacao", "")
         if senha != confirmacao:
             flash("As senhas não coincidem.")
             return render_template("cadastro.html")
-        email = request.form["email"].strip().lower()
+        nome = request.form.get("nome", "").strip()
+        email = request.form.get("email", "").strip().lower()
+        if not 2 <= len(nome) <= 80 or any(ord(char) < 32 for char in nome):
+            flash("Informe um nome válido (2 a 80 caracteres).")
+            return render_template("cadastro.html"), 422
+        if len(email) > 254 or not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email):
+            flash("Informe um e-mail válido.")
+            return render_template("cadastro.html"), 422
+        if not 8 <= len(senha) <= 128:
+            flash("A senha deve ter entre 8 e 128 caracteres.")
+            return render_template("cadastro.html"), 422
         cliente_existente = find({"tipo": "cliente", "email": email}, limit=1)
         if cliente_existente:
             flash("E-mail já cadastrado.")
@@ -236,7 +253,7 @@ def cadastro():
         cliente = {
             "_id": f"cliente:{uuid.uuid4()}",
             "tipo": "cliente",
-            "nome": request.form["nome"].strip(),
+            "nome": nome,
             "email": email,
             "senha_hash": generate_password_hash(senha),
             "criado_em": datetime.now(timezone.utc).isoformat(),
@@ -251,11 +268,15 @@ def cadastro():
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "POST":
-        email = request.form["email"].strip().lower()
+        if not valid_form_csrf():
+            flash("O formulário expirou. Tente novamente.")
+            return redirect(url_for("login"))
+        email = request.form.get("email", "").strip().lower()[:254]
+        senha = request.form.get("senha", "")[:128]
         clientes = find({"tipo": "cliente", "email": email}, limit=1)
 
         credenciais_invalidas = not clientes or not check_password_hash(
-            clientes[0]["senha_hash"], request.form["senha"]
+            clientes[0].get("senha_hash", ""), senha
         )
         if credenciais_invalidas:
             flash("Credenciais inválidas.")
@@ -315,7 +336,7 @@ def checkout():
         flash("Carrinho vazio.")
         return redirect(url_for("catalogo"))
 
-    token = session.setdefault("checkout_token", secrets.token_urlsafe(32))
+    token = session.setdefault("checkout_token", str(uuid.uuid4()))
     entrega = {"nome": clientes[0].get("nome", "")}
     erros = {}
     if request.method == "POST":
@@ -324,12 +345,14 @@ def checkout():
             return redirect(url_for("checkout"))
         entrega, erros = validar_entrega(request.form)
 
-    produtos_atualizados = []
     itens_do_pedido = []
     total = 0.0
 
     for produto_id, quantidade in carrinho_atual.items():
         produto = get(produto_id)
+        if not produto:
+            flash("Uma carta do carrinho não existe mais.")
+            return redirect(url_for("carrinho"))
         produto_exibicao = preparar_produto_para_exibicao(produto)
         quantidade = int(quantidade)
         if quantidade < 1 or not produto.get("ativo") or produto.get("preco") is None:
@@ -354,33 +377,21 @@ def checkout():
         )
 
         total += subtotal
-        produto["estoque"] -= quantidade
-        produtos_atualizados.append(produto)
-
     if request.method == "GET" or erros:
         return render_template("checkout.html", entrega=entrega, erros=erros,
                                estados=ESTADOS, itens=itens_do_pedido,
                                total=round(total, 2), csrf_token=token), (422 if erros else 200)
 
-    pedido = {
-        "_id": f"pedido:{uuid.uuid4()}",
-        "tipo": "pedido",
-        "cliente_id": session["cliente_id"],
-        "entrega": entrega,
-        "status": "CRIADO",
-        "itens": itens_do_pedido,
-        "total": round(total, 2),
-        "criado_em": datetime.now(timezone.utc).isoformat(),
-    }
-    resultado = couch(
-        "POST",
-        "/_bulk_docs",
-        json={"docs": produtos_atualizados + [pedido]},
-    )
-    if any(item.get("error") for item in resultado):
-        flash("Conflito no checkout; recarregue e tente novamente.")
+    try:
+        pedido = place_order(db, session["cliente_id"], carrinho_atual, entrega, token)
+    except CheckoutError as error:
+        app.logger.warning("checkout_rejected request_id=%s reason=%s", g.request_id, error)
+        session.pop("checkout_token", None)
+        flash(str(error))
         return redirect(url_for("carrinho"))
 
+    if pedido.get("status") != "CONFIRMADO":
+        raise DatabaseError(503, "Pedido sem confirmação")
     session["carrinho"] = {}
     session.pop("checkout_token", None)
     flash("Pedido criado.")
@@ -405,14 +416,33 @@ def init_db():
     print("Banco CouchDB inicializado.")
 
 
+@app.cli.command("setup-user")
+def setup_user():
+    """Execute pelo serviço admin; o servidor web usa somente o usuário da loja."""
+    application_user(db)
+    print("Usuário da aplicação configurado, sem privilégios de administrador.")
+
+
 @app.cli.command("sync-cards")
 def sync_cards():
-    """Atualiza metadados; preserva preço, estoque e estado de cada produto."""
-    import_cards(fetch_cards())
+    """Atualiza preço (USD × 5) e cache; preserva estoque e ativo."""
+    try:
+        cards = fetch_cards()
+        import_cards(cards)
+        save_cache(cards)
+    except (requests.RequestException, ValueError, DatabaseError):
+        raise click.ClickException("Sincronização incompleta. Cache anterior preservado; execute novamente. Credenciais omitidas.") from None
+
+
+@app.cli.command("recover-checkouts")
+def recover_checkouts():
+    """Compensa reservas deixadas por uma interrupção durante o checkout."""
+    recovered = recover_pending(db)
+    click.echo(f"{len(recovered)} pedido(s) pendente(s) processado(s).")
 
 
 def import_cards(cards):
-    ensure_db()
+    # init-db é uma etapa administrativa separada. Sincronizar não cria índices.
     ids = list(cards)
     count = 0
     for start in range(0, len(ids), 200):
@@ -420,14 +450,25 @@ def import_cards(cards):
         rows = couch("POST", "/_all_docs?include_docs=true", json={"keys": keys})["rows"]
         existing = {r["id"]: r.get("doc") for r in rows if "id" in r}
         documents = [merge_card(cards[k], existing.get(k)) for k in keys]
-        results = couch("POST", "/_bulk_docs", json={"docs": documents})
-        failures = [r for r in results if r.get("error")]
-        if failures:
-            raise RuntimeError(f"Importação interrompida: {len(failures)} erros no lote.")
+        results = db.bulk(documents)
+        for document, result in zip(documents, results):
+            if result.get("id") != document["_id"]:
+                raise DatabaseError(503, "Identificador inesperado no lote")
+            if result.get("error") == "conflict":
+                for attempt in range(3):
+                    current = get(document["_id"])
+                    try:
+                        save(merge_card(cards[document["_id"]], current))
+                        break
+                    except DatabaseError as error:
+                        if error.status != 409 or attempt == 2:
+                            raise
+            elif not result.get("ok"):
+                raise DatabaseError(503, "Falha individual na sincronização")
         count += len(results)
-    print(f"{count} cartas sincronizadas; preços e estoques preservados.")
+    app.logger.info("catalog_sync count=%s priced=%s", count, sum(c.get("preco") is not None for c in cards.values()))
+    print(f"{count} cartas sincronizadas; preços USD × 5; estoques preservados.")
 
 
 if __name__ == "__main__":
-    ensure_db()
-    app.run(debug=True)
+    app.run(debug=os.getenv("FLASK_DEBUG") == "1")

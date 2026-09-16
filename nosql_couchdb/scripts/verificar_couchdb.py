@@ -1,12 +1,13 @@
 """Verifica a infraestrutura real; escreve somente em um banco temporario proprio.
 
-Execute no container app, que ja recebe COUCHDB_URL pelo Compose.
+Execute no serviço admin; o usuário restrito do site não pode criar bancos.
 Nao testa a seguranca do checkout: demonstra os mecanismos do CouchDB isoladamente.
 """
 import json
 import os
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 import requests
@@ -44,14 +45,17 @@ def main():
     relatorio["acesso_anonimo_bloqueado_http"] = anonimo.status_code
     indices = http("GET", f"/{banco}/_index").json()["indexes"]
     nomes = sorted(i["name"] for i in indices if i["type"] == "json")
-    exigir(set(("idx_tipo_ativo", "idx_tipo_carta_api_id", "idx_tipo_email",
-                "idx_tipo_cliente")).issubset(nomes), "Indices minimos ausentes")
+    exigir(set(("idx_tipo_ativo", "idx_tipo_carta_api_id", "idx_tipo_categoria",
+                "idx_tipo_email", "idx_tipo_cliente", "idx_tipo_status")).issubset(nomes),
+           "Indices minimos ausentes")
     relatorio["indices_json"] = nomes
     consultas = {
         "ativos": {"tipo": "produto", "ativo": True},
         "carta": {"tipo": "produto", "carta_api_id": "OP01-001"},
+        "categoria": {"tipo": "produto", "categoria": "Leader"},
         "cliente_email": {"tipo": "cliente", "email": "teste@example.invalid"},
         "pedidos_cliente": {"tipo": "pedido", "cliente_id": "cliente:teste"},
+        "pedidos_status": {"tipo": "pedido", "status": "CONFIRMADO"},
     }
     relatorio["mango"] = {}
     for nome, selector in consultas.items():
@@ -62,11 +66,12 @@ def main():
         relatorio["mango"][nome] = {"indice": plano["index"]["name"], "resultados": len(docs)}
 
     produtos = http("POST", f"/{banco}/_find", json={
-        "selector": {"tipo": "produto"}, "limit": 1000,
+        "selector": {"tipo": "produto"}, "limit": 3,
         "fields": ["_id", "_rev", "carta_api_id", "preco", "estoque"],
     }).json()["docs"]
     exigir(len(produtos) >= 3, "Seed nao encontrado")
-    relatorio["produtos"] = produtos
+    relatorio["produtos_amostra"] = produtos
+    relatorio["documentos_no_banco"] = http("GET", f"/{banco}").json()["doc_count"]
 
     temporario = "verificacao_docker_" + uuid.uuid4().hex
     criado = False
@@ -103,6 +108,12 @@ def main():
         r = requests.get("http://app:5000" + path, timeout=15)
         exigir(r.status_code == 200, f"Flask {path}: HTTP {r.status_code}")
         relatorio["rotas_flask"][path] = r.status_code
+    saude = requests.get("http://app:5000/health", timeout=15)
+    exigir(saude.status_code == 200 and saude.json()["status"] == "ok", "Health da aplicação")
+    relatorio["health_aplicacao"] = saude.json()
+    evidence = Path("evidencias/verificacao.json")
+    evidence.parent.mkdir(parents=True, exist_ok=True)
+    evidence.write_text(json.dumps(relatorio, indent=2, ensure_ascii=False), encoding="utf-8")
     print(json.dumps(relatorio, indent=2, ensure_ascii=False))
 
 
